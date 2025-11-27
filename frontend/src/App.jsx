@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import "./App.css";
 import io from "socket.io-client";
 import Editor from "@monaco-editor/react";
 
-const socket = io("https://wecode-realtimecodeeditor-1.onrender.com/");
+const socket = io("http://localhost:5000");
 
 const App = () => {
   const [joined, setJoined] = useState(false);
@@ -16,10 +16,26 @@ const App = () => {
   const [typing, setTyping] = useState("");
   const [outPut, setOutPut] = useState("");
   const [version, setVersion] = useState("*");
+  
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState("");
+  const chatEndRef = useRef(null);
 
   useEffect(() => {
-    socket.on("userJoined", (users) => {
-      setUsers(users);
+    socket.on("initialState", ({ code, language, output, messages, users }) => {
+        setCode(code);
+        setLanguage(language);
+        setOutPut(output);
+        setMessages(messages);
+        setUsers(users);
+    });
+
+    socket.on("userJoined", (payload) => {
+      if (Array.isArray(payload)) {
+          setUsers(payload);
+      } else if (payload && payload.users) {
+          setUsers(payload.users);
+      }
     });
 
     socket.on("codeUpdate", (newCode) => {
@@ -39,12 +55,21 @@ const App = () => {
       setOutPut(response.run.output);
     });
 
+    socket.on("receiveMessage", (message) => {
+        setMessages((prev) => [...prev, message]);
+        setTimeout(() => {
+            chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        }, 100);
+    });
+
     return () => {
+      socket.off("initialState");
       socket.off("userJoined");
       socket.off("codeUpdate");
       socket.off("userTyping");
       socket.off("languageUpdate");
       socket.off("codeResponse");
+      socket.off("receiveMessage");
     };
   }, []);
 
@@ -52,9 +77,7 @@ const App = () => {
     const handleBeforeUnload = () => {
       socket.emit("leaveRoom");
     };
-
     window.addEventListener("beforeunload", handleBeforeUnload);
-
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
@@ -74,6 +97,7 @@ const App = () => {
     setUserName("");
     setCode("// start code here");
     setLanguage("javascript");
+    setMessages([]);
   };
 
   const copyRoomId = () => {
@@ -95,8 +119,20 @@ const App = () => {
   };
 
   const runCode = () => {
+    setOutPut("Running Code..."); 
     socket.emit("compileCode", { code, roomId, language, version });
   };
+  
+  const sendMessage = () => {
+    if (newMessage.trim()) {
+        socket.emit("sendMessage", { roomId, message: newMessage, userName });
+        setNewMessage("");
+    }
+  };
+
+  const handleEnterKey = (e) => {
+      if(e.key === 'Enter') sendMessage();
+  }
 
   if (!joined) {
     return (
@@ -131,13 +167,16 @@ const App = () => {
           </button>
           {copySuccess && <span className="copy-success">{copySuccess}</span>}
         </div>
+        
         <h3>Users in Room:</h3>
         <ul>
           {users.map((user, index) => (
             <li key={index}>{user.slice(0, 8)}...</li>
           ))}
         </ul>
+        
         <p className="typing-indicator">{typing}</p>
+        
         <select
           className="language-selector"
           value={language}
@@ -148,9 +187,43 @@ const App = () => {
           <option value="java">Java</option>
           <option value="cpp">C++</option>
         </select>
+        
         <button className="leave-button" onClick={leaveRoom}>
           Leave Room
         </button>
+
+        <div className="chat-container">
+            <h3>Chat</h3>
+            <div className="chat-box">
+                {messages.map((msg, index) => (
+                    <div 
+                      key={index} 
+                      className={`chat-message ${msg.sender === "System" ? "system-message" : ""}`}
+                    >
+                        {msg.sender === "System" ? (
+                           // System message: just text, no name
+                           <span>{msg.text}</span> 
+                        ) : (
+                           // Normal message: Name + Text
+                           <>
+                             <strong>{msg.sender}: </strong><span>{msg.text}</span>
+                           </>
+                        )}
+                    </div>
+                ))}
+                <div ref={chatEndRef} />
+            </div>
+            <div className="chat-input-area">
+                <input 
+                    type="text" 
+                    placeholder="Type message..." 
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    onKeyDown={handleEnterKey}
+                />
+                <button onClick={sendMessage}>Send</button>
+            </div>
+        </div>
       </div>
 
       <div className="editor-wrapper">
